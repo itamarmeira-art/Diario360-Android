@@ -1,0 +1,9 @@
+{
+  "name": "Diário 360 — Mentor Estoico",
+  "short_name": "Diário 360",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "description": "Reflexões, diário, exercícios e conversas com um mentor estoico por IA."
+}
