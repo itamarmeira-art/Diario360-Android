@@ -151,11 +151,13 @@ function renderJournal(){const n=localStorage.getItem('d360-note-'+d.toISOString
 // Nunca coloca chave de API dentro do APK.
 const cfg=window.DIARIO360_CONFIG||{};
 const apiUrl=(path)=>`${(cfg.apiBaseUrl||'').replace(/\/$/,'')}${path}`;
-const mentorAudio={element:null,playing:false,url:null};
+const mentorAudio={element:null,playing:false,url:null,controller:null,requestId:0};
 
 function stopMentorAudio(){
-  if(mentorAudio.element){mentorAudio.element.pause();mentorAudio.element.currentTime=0;}
-  if(mentorAudio.url){URL.revokeObjectURL(mentorAudio.url); mentorAudio.url=null;}
+  mentorAudio.requestId++;
+  if(mentorAudio.controller){mentorAudio.controller.abort();mentorAudio.controller=null;}
+  if(mentorAudio.element){mentorAudio.element.pause();mentorAudio.element.currentTime=0;mentorAudio.element=null;}
+  if(mentorAudio.url){URL.revokeObjectURL(mentorAudio.url);mentorAudio.url=null;}
   mentorAudio.playing=false;
 }
 
@@ -166,11 +168,11 @@ function reflectionText(){
   return `${q} ${a}. ${d}`.replace(/\s+/g,' ').trim();
 }
 
-async function requestNeuralVoice(text){
+async function requestNeuralVoice(text,signal){
   const base=cfg.apiBaseUrl||'';
   if(!base) throw new Error('backend-not-configured');
   const r=await fetch(apiUrl(cfg.stoicTtsPath||'/api/stoic-tts'),{
-    method:'POST',headers:{'Content-Type':'application/json'},
+    method:'POST',headers:{'Content-Type':'application/json'},signal,
     body:JSON.stringify({text,mentor:selectedMentor,voiceProfile:cfg.voiceProfile||'deep',language:'pt-BR'})
   });
   if(!r.ok) throw new Error('tts-failed');
@@ -180,10 +182,16 @@ async function requestNeuralVoice(text){
 }
 
 async function playNeuralVoice(text){
-  if(mentorAudio.playing){stopMentorAudio();return;}
+  // Cada novo toque cancela imediatamente qualquer áudio ou geração anterior.
+  // Assim, mesmo com vários toques rápidos, somente o último pedido pode tocar.
   stopMentorAudio();
+  const requestId=mentorAudio.requestId;
+  const controller=new AbortController();
+  mentorAudio.controller=controller;
   try{
-    const blob=await requestNeuralVoice(text);
+    const blob=await requestNeuralVoice(text,controller.signal);
+    if(controller.signal.aborted||requestId!==mentorAudio.requestId)return;
+    mentorAudio.controller=null;
     mentorAudio.url=URL.createObjectURL(blob);
     mentorAudio.element=new Audio(mentorAudio.url);
     mentorAudio.element.volume=.96;
@@ -192,6 +200,7 @@ async function playNeuralVoice(text){
     mentorAudio.element.onerror=()=>{stopMentorAudio();alert('Voz do Mentor indisponível.');};
     await mentorAudio.element.play();
   }catch(e){
+    if(e?.name==='AbortError'||controller.signal.aborted)return;
     stopMentorAudio();
     const m=e.message==='backend-not-configured'?'Configure a URL HTTPS do backend em app-config.js para ativar a voz neural.':'Voz neural indisponível. Nenhuma voz sintética do navegador será usada.';
     alert(m);
@@ -213,7 +222,23 @@ function addMsg(text,who,withVoice=false){
   }
   messages.appendChild(div);messages.scrollTop=messages.scrollHeight;return div;
 }
-function localStoic(q){const s=q.toLowerCase();const intro=`Pela perspectiva de ${selectedMentor}, `;if(/ansiedad|medo|preocup/.test(s))return intro+'comece separando previsão de julgamento. Pergunte o que depende de você agora. O futuro não está sob seu comando; sua preparação, sua conduta e o próximo passo estão.';if(/injusti|raiva|irrit/.test(s))return intro+'a primeira responsabilidade é não permitir que o erro do outro determine o seu caráter. Preserve a justiça na sua própria ação, responda com firmeza e evite transformar indignação em perda de autocontrole.';if(/disciplina|procrast|pregui/.test(s))return intro+'disciplina não exige vontade perfeita. Exige uma escolha coerente com o dever presente. Reduza a tarefa ao próximo ato correto e faça-o antes de negociar com o desconforto.';if(/trabalho|chefe|equipe|colega/.test(s))return intro+'distinga o comportamento dos outros da sua própria função. Você controla preparo, clareza, respeito, decisão e execução. Faça bem a sua parte e trate o restante como condição externa.';if(/sentido|vida|propósito/.test(s))return intro+'a vida boa não é definida pelo conforto, mas pela qualidade do caráter. O estoicismo aponta para viver racionalmente, cumprir deveres, cultivar virtude e usar cada circunstância como material para agir melhor.';return intro+'eu olharia primeiro para quatro pontos: qual é o fato sem interpretação, o que realmente depende de você, qual virtude a situação exige e qual é a próxima ação correta. Conte-me um pouco mais da situação e aplicamos isso concretamente.';}
+function localStoic(q){
+  const s=q.toLowerCase();
+  const lenses={
+    'Marco Aurélio':'Concentre-se no dever presente, na disciplina do julgamento e em agir para o bem comum. Não entregue sua paz ao comportamento alheio.',
+    'Sêneca':'Observe a emoção sem se tornar servo dela. Use bem o tempo, prepare-se para a adversidade e transforme a situação em exercício de caráter.',
+    'Epicteto':'Separe imediatamente o que depende de você do que não depende. Sua liberdade está no julgamento, na escolha e na ação que você governa.',
+    'Zenão':'Pergunte qual ação está de acordo com a razão, a virtude e a natureza humana social. O bem está no caráter, não nas circunstâncias externas.',
+    'Musônio Rufo':'Leve a filosofia para a prática: simplicidade, disciplina e treino diário. A resposta correta deve aparecer no modo de viver, não apenas nas ideias.',
+    'Cleantes':'Aceite o curso dos acontecimentos sem passividade e persevere naquilo que a razão exige. Faça do obstáculo uma ocasião para fortalecer a constância.',
+    'Catão':'Escolha integridade e coragem mesmo quando a opção correta for desconfortável. Não negocie o caráter para obter conveniência.'
+  };
+  let base=lenses[selectedMentor]||lenses['Marco Aurélio'];
+  if(/ansiedad|medo|preocup/.test(s))base+=' Agora escolha uma ação concreta que esteja sob seu controle.';
+  else if(/injusti|raiva|irrit/.test(s))base+=' Responda com firmeza, mas sem permitir que o erro do outro determine quem você será.';
+  else if(/disciplina|procrast|pregui/.test(s))base+=' Reduza tudo ao próximo ato correto e execute-o sem esperar vontade perfeita.';
+  return `Pela perspectiva de ${selectedMentor}: ${base}`;
+}
 async function askAI(q){
   const base=cfg.apiBaseUrl||'';
   if(!base){if(cfg.allowLocalChatFallback)return {reply:localStoic(q),mode:'local'};throw new Error('backend-not-configured');}
